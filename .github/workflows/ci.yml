@@ -1,0 +1,33 @@
+name: build-and-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container: ros:jazzy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ros-jazzy-ros-gz ros-jazzy-cv-bridge python3-opencv
+          rosdep update --rosdistro jazzy
+          rosdep install --from-paths src --ignore-src -y --rosdistro jazzy
+
+      - name: Build
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --symlink-install --event-handlers console_direct+
+
+      - name: Test
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/setup.bash
+          colcon test --event-handlers console_direct+
+          colcon test-result --verbose

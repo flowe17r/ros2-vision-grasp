@@ -1,0 +1,208 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="vision_grasp">
+
+    <scene>
+      <ambient>0.35 0.35 0.38 1</ambient>
+      <background>0.72 0.74 0.78 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 5 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.4 0.3 -0.9</direction>
+    </light>
+
+    <light type="directional" name="fill">
+      <cast_shadows>false</cast_shadows>
+      <pose>0 0 5 0 0 0</pose>
+      <diffuse>0.35 0.35 0.35 1</diffuse>
+      <specular>0.05 0.05 0.05 1</specular>
+      <direction>0.4 -0.5 -0.8</direction>
+    </light>
+
+    <!-- 传感器渲染系统：相机必须加载它才会出图 -->
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <!-- Phase 3 起通过 ros_gz_sim create 生成机械臂，需要这两个系统 -->
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>10 10</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>10 10</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.55 0.55 0.55 1</ambient>
+            <diffuse>0.60 0.60 0.60 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 工作台：台面高度 0.25 m -->
+    <model name="table">
+      <static>true</static>
+      <pose>0 0 0.125 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>1.0 0.7 0.25</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>1.0 0.7 0.25</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.32 0.33 0.36 1</ambient>
+            <diffuse>0.38 0.39 0.42 1</diffuse>
+            <specular>0.08 0.08 0.08 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!--
+      三个 5 cm 彩色方块（静态）。坐标即 Phase 2 的 ground truth：
+        red    (-0.12,  0.10, 0.275)
+        green  ( 0.00, -0.10, 0.275)
+        blue   ( 0.12,  0.08, 0.275)
+      页面高度 0.25 + 半边长 0.025 = 0.275
+    -->
+    <model name="cube_red">
+      <static>true</static>
+      <pose>-0.12 0.10 0.275 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.05</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.05</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.75 0.02 0.02 1</ambient>
+            <diffuse>0.90 0.03 0.03 1</diffuse>
+            <specular>0.10 0.10 0.10 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="cube_green">
+      <static>true</static>
+      <pose>0.00 -0.10 0.275 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.05</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.05</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.02 0.55 0.05 1</ambient>
+            <diffuse>0.03 0.80 0.08 1</diffuse>
+            <specular>0.10 0.10 0.10 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="cube_blue">
+      <static>true</static>
+      <pose>0.12 0.08 0.275 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.05</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.05 0.05 0.05</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.02 0.05 0.65 1</ambient>
+            <diffuse>0.03 0.08 0.90 1</diffuse>
+            <specular>0.10 0.10 0.10 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!--
+      俯视相机：位于 (0.7, 0, 0.9)，朝 -X 俯视台面中心。
+      rpy 的 pitch=0.728 rad（约 41.7°），yaw=π。
+      相机话题由 <topic> 设为 camera，因此 gz 话题为：
+        /camera/image  /camera/camera_info  /camera/depth_image  /camera/points
+      首次运行请用 `gz topic -l | grep camera` 确认。
+    -->
+    <model name="camera_mount">
+      <static>true</static>
+      <pose>0.7 0 0.9 0 0.728 3.1416</pose>
+      <link name="camera_link">
+        <sensor name="camera" type="rgbd_camera">
+          <topic>camera</topic>
+          <always_on>true</always_on>
+          <update_rate>30</update_rate>
+          <visualize>true</visualize>
+          <camera>
+            <horizontal_fov>1.047</horizontal_fov>
+            <image>
+              <width>640</width>
+              <height>480</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.05</near>
+              <far>10.0</far>
+            </clip>
+          </camera>
+        </sensor>
+      </link>
+    </model>
+
+  </world>
+</sdf>
