@@ -13,13 +13,13 @@ from sensor_msgs.msg import CameraInfo, Image
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
-from arm_interfaces.msg import Detection2DArray
+from arm_interfaces.msg import Detection2DArray, Target3D, Target3DArray
 
-# 方块中心在 base_link 下的真值（world 与 base_link 原点重合）
+# 方块中心在 base_link 下的真值（base_link 在 world 的 (-0.35, 0, 0.25)）
 GROUND_TRUTH = {
-    'red': (-0.12, 0.10, 0.275),
-    'green': (0.00, -0.10, 0.275),
-    'blue': (0.12, 0.08, 0.275),
+    'red': (0.23, 0.10, 0.025),
+    'green': (0.35, -0.10, 0.025),
+    'blue': (0.47, 0.08, 0.025),
 }
 
 
@@ -59,6 +59,8 @@ class BackprojectNode(Node):
             self.on_detections, 10)
         self._pub = self.create_publisher(
             PoseArray, '/perception/targets_base', 10)
+        self._pub3d = self.create_publisher(
+            Target3DArray, '/perception/targets_3d', 10)
         self.get_logger().info('backproject_node ready')
 
     def on_camera_info(self, msg):
@@ -156,6 +158,9 @@ class BackprojectNode(Node):
         targets = PoseArray()
         targets.header.stamp = msg.header.stamp
         targets.header.frame_id = target_frame
+        targets3d = Target3DArray()
+        targets3d.header.stamp = msg.header.stamp
+        targets3d.header.frame_id = target_frame
         lines = []
 
         for det in msg.detections:
@@ -182,10 +187,20 @@ class BackprojectNode(Node):
             pose.position.z = bz
             pose.orientation.w = 1.0
             targets.poses.append(pose)
+
+            target3d = Target3D()
+            target3d.color_name = det.color_name
+            target3d.position.x = bx
+            target3d.position.y = by
+            target3d.position.z = bz
+            target3d.depth = float(depth_value)
+            targets3d.targets.append(target3d)
+
             lines.append(f'{det.color_name}=({bx:.3f},{by:.3f},{bz:.3f})')
             self._update_error(det.color_name, bx, by)
 
         self._pub.publish(targets)
+        self._pub3d.publish(targets3d)
         self._frames += 1
         if lines:
             self.get_logger().info(

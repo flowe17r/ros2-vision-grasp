@@ -28,7 +28,13 @@ arm_controller:
     allow_partial_joints_goal: false
     constraints:
       stopped_velocity_tolerance: 0.05
-      goal_time: 1.0
+      goal_time: 2.0
+      joint1: {goal: 0.05, trajectory: 0.2}
+      joint2: {goal: 0.05, trajectory: 0.2}
+      joint3: {goal: 0.05, trajectory: 0.2}
+      joint4: {goal: 0.05, trajectory: 0.2}
+      joint5: {goal: 0.05, trajectory: 0.2}
+      joint6: {goal: 0.05, trajectory: 0.2}
 
 gripper_controller:
   ros__parameters:
@@ -43,4 +49,7 @@ gripper_controller:
     allow_partial_joints_goal: false
     constraints:
       stopped_velocity_tolerance: 0.05
-      goal_time: 1.0
+      goal_time: 3.0
+      # 夹到方块时指关节会被挡住约 1-2 mm，给足 goal 容差避免动作被判失败
+      finger_left_joint: {goal: 0.02, trajectory: 0.05}
+      finger_right_joint: {goal: 0.02, trajectory: 0.05}

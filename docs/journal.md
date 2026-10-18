@@ -98,9 +98,20 @@
 - 规避：`arm_gazebo.launch.py` 默认改为 `gz sim -s -r`（只跑 Gazebo server，不打开一直空白的 Gazebo GUI），RViz 仍保留；需要 GUI 时加 `use_gz_gui:=true`。
 - 若仍复现，再考虑升级 VMware Workstation、关闭 3D 加速或改用软件渲染。
 
+### Phase 3b 实现（2026-10-18，待验收）
+
+- URDF：新增 `tcp` 固定关节（`gripper_base` 下方 35 mm），KDL 链改为 `base_link → tcp`；`joint5` 限位由 ±2.0 扩到 ±3.1，否则夹爪无法朝下；夹爪指原点改为 ±26 mm（闭合间隙 40 mm，张开 15 mm 时 70 mm），可夹 50 mm 方块；指垫加 `mu=5.0`。
+- world：三个方块由 static 改为动态刚体（50 g、摩擦 1.0）；新增 `PosePublisher`，把 `/world/vision_grasp/pose/info` 桥接到 `tf2_msgs/TFMessage`，抓取后用它校验方块确实被抬起。
+- 接口：新增 `Target3D`/`Target3DArray` 消息与 `SolveIK`/`SolveFK`/`Grasp` 服务；反投影节点同时发布 `/perception/targets_3d`（带颜色名，抓取节点用）。
+- `arm_kinematics`（C++）：`kdl_parser` 建链、`ChainIkSolverPos_LMA` 求解；IK 依次尝试请求种子、当前关节角、零位和 8 组随机种子，结果必须满足关节限位、位置误差 <5 mm、姿态误差 <0.1 rad。
+- `arm_grasp`（Python）：状态机「开爪 → 预抓取 z=0.16 → 下降 z=0.032 → 闭合 → 抬升 z=0.18」，全程走 `FollowJointTrajectory`；夹爪控制器为指关节加了 20 mm goal 容差，避免夹到方块被挡后动作被判失败。
+- launch：`arm_gazebo.launch.py` 整合相机桥接、`base_link` 新相机 TF `(1.05, 0, 0.65)`、感知、反投影、KDL 与抓取节点；默认 `use_gz_gui=false`、`use_rviz=true`。
+- 反投影真值换算到新 `base_link`：red (0.23, 0.10)、green (0.35, -0.10)、blue (0.47, 0.08)，z 真值 0.025。
+- 待验收：编译、三色定位误差复测、IK 成功率采样（`tools/ik_benchmark.py`）、夹爪开合、红/绿/蓝抓取与抬升校验。
+
 ### 下一步
 
-- 测 `gripper_controller` 开合；开始 Phase 3b：加 TCP 坐标系、KDL 正逆解服务（C++）与抓取状态机。
+- 同步到虚拟机，安装 `ros-jazzy-kdl-parser`/`ros-jazzy-orocos-kdl`/`libeigen3-dev` 后编译；按 README Phase 3b 的四条命令逐项验收，实测数据回填 README 与简历。
 
 
 

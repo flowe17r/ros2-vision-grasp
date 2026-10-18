@@ -163,13 +163,13 @@
     </inertial>
   </link>
 
-  <!-- joint 5: wrist pitch -->
+  <!-- joint 5: wrist pitch（±3.1 才能让夹爪朝下抓取） -->
   <joint name="joint5" type="revolute">
     <parent link="link4"/>
     <child link="link5"/>
     <origin xyz="0 0 0.06" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-2.0" upper="2.0" effort="10.0" velocity="2.0"/>
+    <limit lower="-3.1" upper="3.1" effort="10.0" velocity="2.0"/>
     <dynamics damping="0.1" friction="0.02"/>
   </joint>
   <link name="link5">
@@ -233,14 +233,14 @@
     <visual>
       <origin xyz="0 0 0.015" rpy="0 0 0"/>
       <geometry>
-        <box size="0.09 0.07 0.03"/>
+        <box size="0.09 0.10 0.03"/>
       </geometry>
       <material name="rubber"/>
     </visual>
     <collision>
       <origin xyz="0 0 0.015" rpy="0 0 0"/>
       <geometry>
-        <box size="0.09 0.07 0.03"/>
+        <box size="0.09 0.10 0.03"/>
       </geometry>
     </collision>
     <inertial>
@@ -250,11 +250,11 @@
     </inertial>
   </link>
 
-  <!-- left finger -->
+  <!-- left finger：闭合时间隙 40 mm，张开 15 mm 时间隙 70 mm，可夹 50 mm 方块 -->
   <joint name="finger_left_joint" type="prismatic">
     <parent link="gripper_base"/>
     <child link="finger_left"/>
-    <origin xyz="0 0.02 0" rpy="0 0 0"/>
+    <origin xyz="0 0.026 0" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit lower="0.0" upper="0.03" effort="10.0" velocity="0.05"/>
   </joint>
@@ -283,7 +283,7 @@
   <joint name="finger_right_joint" type="prismatic">
     <parent link="gripper_base"/>
     <child link="finger_right"/>
-    <origin xyz="0 -0.02 0" rpy="0 0 0"/>
+    <origin xyz="0 -0.026 0" rpy="0 0 0"/>
     <axis xyz="0 -1 0"/>
     <limit lower="0.0" upper="0.03" effort="10.0" velocity="0.05"/>
   </joint>
@@ -307,6 +307,29 @@
       <inertia ixx="0.0000156" ixy="0" ixz="0" iyy="0.0000159" iyz="0" izz="0.00000154"/>
     </inertial>
   </link>
+
+  <!-- TCP：两指中点，位于夹爪基座下方 35 mm；抓取时对准方块中心 -->
+  <joint name="tcp_joint" type="fixed">
+    <parent link="gripper_base"/>
+    <child link="tcp"/>
+    <origin xyz="0 0 -0.035" rpy="0 0 0"/>
+  </joint>
+  <link name="tcp">
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="0.000001" ixy="0" ixz="0" iyy="0.000001" iyz="0" izz="0.000001"/>
+    </inertial>
+  </link>
+
+  <!-- 指垫摩擦：摩擦不足会导致抬升时方块滑落 -->
+  <gazebo reference="finger_left">
+    <mu1>5.0</mu1>
+    <mu2>5.0</mu2>
+  </gazebo>
+  <gazebo reference="finger_right">
+    <mu1>5.0</mu1>
+    <mu2>5.0</mu2>
+  </gazebo>
 
   <ros2_control name="GazeboSimSystem" type="system">
     <hardware>
