@@ -15,7 +15,6 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from tf2_msgs.msg import TFMessage
 from trajectory_msgs.msg import JointTrajectoryPoint
 
 from arm_interfaces.msg import Target3DArray
@@ -29,10 +28,13 @@ class GraspNode(Node):
     def __init__(self):
         super().__init__('grasp_node')
         self.declare_parameter('target_topic', '/perception/targets_3d')
-        self.declare_parameter('pose_topic', '/world/vision_grasp/pose/info')
+        self.declare_parameter('cube_pose_topic', '/model/cube_{color}/pose')
         self.declare_parameter('ik_service', '/kinematics/solve_ik')
         self.declare_parameter('pregrasp_height', 0.16)
-        self.declare_parameter('grasp_height', 0.032)
+        # link5 腕筒（r=32 mm）从 link5 原点延伸到 tool0，最低点约在 TCP + 10 mm。
+        # 50 mm 方块的顶面在 z=0.050，TCP 低于 0.040 腕筒就会插进方块顶，descend
+        # 被顶死（JTC 报 goal_time_tolerance）。0.050 时指尖在 0.025，仍夹住上半 25 mm。
+        self.declare_parameter('grasp_height', 0.050)
         self.declare_parameter('lift_height', 0.18)
         self.declare_parameter('gripper_open', 0.015)
         self.declare_parameter('gripper_close', 0.004)
@@ -52,9 +54,12 @@ class GraspNode(Node):
         self.create_subscription(
             JointState, '/joint_states', self._on_joints, 10,
             callback_group=self._cb)
-        self.create_subscription(
-            TFMessage, self.get_parameter('pose_topic').value,
-            self._on_poses, 10, callback_group=self._cb)
+        pose_template = self.get_parameter('cube_pose_topic').value
+        for color in ('red', 'green', 'blue'):
+            self.create_subscription(
+                Pose, pose_template.format(color=color),
+                lambda msg, c=color: self._on_cube_pose(c, msg), 10,
+                callback_group=self._cb)
 
         self._ik = self.create_client(
             SolveIK, self.get_parameter('ik_service').value,
@@ -83,12 +88,8 @@ class GraspNode(Node):
         for name, position in zip(msg.name, msg.position):
             self._joints[name] = position
 
-    def _on_poses(self, msg):
-        for tf in msg.transforms:
-            name = tf.child_frame_id or tf.header.frame_id
-            key = name.rsplit('/', 1)[-1]
-            if key.startswith('cube_'):
-                self._cube_z[key[len('cube_'):]] = tf.transform.translation.z
+    def _on_cube_pose(self, color, msg):
+        self._cube_z[color] = msg.position.z
 
     def _handle_grasp(self, request, response):
         with self._lock:
@@ -155,7 +156,8 @@ class GraspNode(Node):
             return False, f'pregrasp move failed: {message}'
 
         grasp_joints = None
-        for height in (grasp_height, grasp_height + 0.01, grasp_height - 0.007):
+        # 只往上退：低于 grasp_height 的档位会让腕筒插进方块顶
+        for height in (grasp_height, grasp_height + 0.015, grasp_height + 0.03):
             grasp_joints, last_ik_error = self._solve(x, y, height, 0.0, pre_joints)
             if grasp_joints is not None:
                 break
@@ -210,10 +212,12 @@ class GraspNode(Node):
         request.target.position.x = float(x)
         request.target.position.y = float(y)
         request.target.position.z = float(z)
-        request.target.orientation.x = math.cos(yaw / 2.0)
-        request.target.orientation.y = math.sin(yaw / 2.0)
-        request.target.orientation.z = 0.0
-        request.target.orientation.w = 0.0
+        # 夹爪沿 TCP 的 -z 抓取，因此 TCP 的 +z 必须朝上，只绕 z 叠加 yaw；
+        # 若用绕 x 的 180° 翻转会把夹爪倒过来，下探时变成腕部先撞方块
+        request.target.orientation.x = 0.0
+        request.target.orientation.y = 0.0
+        request.target.orientation.z = math.sin(yaw / 2.0)
+        request.target.orientation.w = math.cos(yaw / 2.0)
         request.seed = [float(v) for v in seed]
 
         future = self._ik.call_async(request)
@@ -250,7 +254,8 @@ class GraspNode(Node):
             return False, 'goal send timeout'
         if not handle.accepted:
             return False, 'goal rejected'
-        wrapped = self._wait(handle.get_result_async(), seconds + 8.0)
+        # 虚拟机里 RTF 可能低到 0.1，轨迹耗时按仿真时间计，等待时间要放宽
+        wrapped = self._wait(handle.get_result_async(), max(20.0, seconds * 10.0))
         if wrapped is None:
             return False, 'result timeout'
         if wrapped.status != GoalStatus.STATUS_SUCCEEDED:

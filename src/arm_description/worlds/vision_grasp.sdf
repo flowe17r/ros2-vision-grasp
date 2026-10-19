@@ -33,17 +33,8 @@
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
 
-    <!-- 发布 /world/vision_grasp/pose/info，用于抓取后校验方块是否被抬起 -->
-    <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
-      <publish_model_pose>true</publish_model_pose>
-      <publish_nested_model_pose>true</publish_nested_model_pose>
-      <publish_link_pose>false</publish_link_pose>
-      <publish_visual_pose>false</publish_visual_pose>
-      <publish_collision_pose>false</publish_collision_pose>
-      <publish_sensor_pose>false</publish_sensor_pose>
-      <use_pose_vector_msg>true</use_pose_vector_msg>
-      <update_frequency>5</update_frequency>
-    </plugin>
+    <!-- 标准 world 插件：发布场景与位姿信息；PosePublisher 是模型插件，只能挂在 model 里 -->
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
 
     <model name="ground_plane">
       <static>true</static>
@@ -108,6 +99,13 @@
     -->
     <model name="cube_red">
       <pose>-0.12 0.10 0.275 0 0 0</pose>
+      <!-- 模型级位姿发布：/model/cube_red/pose，桥接到 ROS 后用于抓取校验 -->
+      <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
+        <publish_model_pose>true</publish_model_pose>
+        <publish_link_pose>false</publish_link_pose>
+        <use_pose_vector_msg>false</use_pose_vector_msg>
+        <update_frequency>10</update_frequency>
+      </plugin>
       <link name="link">
         <inertial>
           <mass>0.05</mass>
@@ -145,6 +143,12 @@
 
     <model name="cube_green">
       <pose>0.00 -0.10 0.275 0 0 0</pose>
+      <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
+        <publish_model_pose>true</publish_model_pose>
+        <publish_link_pose>false</publish_link_pose>
+        <use_pose_vector_msg>false</use_pose_vector_msg>
+        <update_frequency>10</update_frequency>
+      </plugin>
       <link name="link">
         <inertial>
           <mass>0.05</mass>
@@ -182,6 +186,12 @@
 
     <model name="cube_blue">
       <pose>0.12 0.08 0.275 0 0 0</pose>
+      <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
+        <publish_model_pose>true</publish_model_pose>
+        <publish_link_pose>false</publish_link_pose>
+        <use_pose_vector_msg>false</use_pose_vector_msg>
+        <update_frequency>10</update_frequency>
+      </plugin>
       <link name="link">
         <inertial>
           <mass>0.05</mass>

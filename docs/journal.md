@@ -113,6 +113,54 @@
 
 - 同步到虚拟机，安装 `ros-jazzy-kdl-parser`/`ros-jazzy-orocos-kdl`/`libeigen3-dev` 后编译；按 README Phase 3b 的四条命令逐项验收，实测数据回填 README 与简历。
 
+## 2026-10-19 Phase 3b 验收：三个连环坑与最终通过
+
+**结果**：同一次干净启动内连续抓取，**red 130 mm / green 128 mm / blue 117 mm**，全部 > 30 mm 门槛；IK 成功率 **28/30 = 93.3%**；零位正解 TCP z = **0.785 m**。
+
+### 改动记录（供交接）
+
+1. **`grasp_node._solve()` 的目标姿态翻转 180°**（根因一）
+   - 原写法用绕 x 轴 180° 的四元数 `(cos(yaw/2), sin(yaw/2), 0, 0)`，把夹爪倒过来、手指朝上、腕部朝下，下探时是腕部先压方块顶。
+   - 改为单位姿态 + 绕 z 的 yaw：`(0, 0, sin(yaw/2), cos(yaw/2))`。夹爪沿 TCP 的 −z 抓取，TCP 的 +z 必须朝上。
+2. **`gripper_mount` 偏置 `z = +0.03` → `-0.03`**（根因二，`arm_description/urdf/arm.urdf.xacro`）
+   - 姿态修正后 TCP 的 +z 朝上，`joint5`/`joint6` 就得反向折约 127°，`link5` 腕筒（r=32 mm、长 50 mm）被折到两指正中间、深到与指尖同高。指间净空 70 mm 装不下腕筒 64 mm + 方块 50 mm。
+   - 夹爪整体下移 60 mm，TCP 从 `tool0` 下方 5 mm 变到下方 65 mm，腕部才能留在物体上方。零位 TCP 由 0.845 变为 **0.785**，运动学链整体变长，旧的 IK 成功率与正解数字全部作废。
+3. **`joint3` effort 30 → 100**（`arm.urdf.xacro`，`joint2` 先前已同样提到 100）
+   - gz_ros2_control 的位置控制在远端目标处索取的力矩远大于重力矩：blue 停点实测 joint2 79–93 N·m、joint3 37.8 N·m，而按实测位姿算的重力矩只有 joint2 ≈10.7、joint3 ≈2.1 N·m。30 N·m 会被削顶。
+4. **`grasp_height` 0.032 → 0.050，回退档位改为只往上加**（根因三，`arm_grasp/grasp_node.py`）
+   - 腕筒最低点 ≈ TCP + 10 mm。TCP=0.032 时腕筒最低 0.042，插进 50 mm 方块顶面（0.050）8 mm，descend 卡死在最后 3°（joint2 差 0.056 rad，其余五关节精确到位），JTC 报 `Aborted due to goal_time_tolerance exceeding by 2.002 seconds`。
+   - 回退序列原为 `(h, h+0.01, h−0.007)`，`h−0.007` 会退到干涉区，改为 `(h, h+0.015, h+0.03)`。
+   - red/green 之所以在 0.032 也能过：它们的 IK 在 0.032 无解、自动退到了 0.042 那一档；blue 的 IK 在 0.032 有解（`pos_error=2.9e-6`），于是真的走下去撞上。
+5. **`tools/ik_benchmark.py` 采样姿态与方块高度过期**
+   - `topdown_pose` 用的是 `orientation.x = 1.0, w = 0.0`（绕 x 翻 180°），即根因一的错误姿态；旧的 **96.7% 是在错误姿态下测的**，与抓取节点实际用的姿态不是一回事。改为单位姿态并更名 `grasp_pose`，方块采样高度 0.032 → 0.050。
+6. **方块真值改走 per-model pose 话题，取代上文 Phase 3b 实现里的 `pose/info` 方案**
+   - `PosePublisher` 插件挂到三个方块 model 内部，桥接 `/model/cube_{red,green,blue}/pose` → `geometry_msgs/Pose`；`/world/vision_grasp/pose/info` 经桥接会丢失 frame 名、且混着机械臂 link，抓取节点判抬升时不好用。`arm_grasp/package.xml` 随之去掉 `tf2_msgs` 依赖。
+   - `kinematics_node.cpp` 的 IK 调用改为 `ik_solver_->CartToJnt(candidate, target, q_out)`（原先误写成 `JntToCart`，参数顺序也不对）。
+   - `arm_gazebo.launch.py`：三个 controller spawner 改由 `OnProcessExit(spawn_arm)` 触发，并加 `--controller-manager-timeout 120 --switch-timeout 60`。软件渲染下 `controller_manager` 起得慢，spawner 与建臂并发时会只加载到 `gripper_controller` 就退出（表现为 `ros2 control list_controllers` 只有一个 active），串行 + 放宽超时后三个都 active。
+
+### 排查过程中被数据推翻的假设
+
+- 「跟踪增益不够」：`ros2 param set /gz_ros_control position_proportional_gain 0.5` 返回成功但停点完全不变，参数未动态生效；且 joint4/5/6 都能精确到位，说明不是全局跟踪问题。
+- 「joint2 力矩不够」：effort 30 → 100 后 red 仍以完全相同的停点失败（q2≈1.203），瓶颈不在力矩。
+- 「joint3 力矩不够」：提到 100 后 blue 仍失败，但停点从 joint3=0.9756 变到 0.7887、effort 达到 37.8（> 旧上限 30），证明新限位确实生效、旧值确实被削顶，所以保留 100；它不是 blue 失败的根因。
+- 「方块被推动导致偏差」：`/model/cube_red/pose` 始终为 world (-0.1205, 0.0996, 0.2752)，方块没动；机械臂进入视野后 red 的 x 从 0.239 漂到 0.254 是**遮挡下的 HSV 分割偏差**。
+- 决定性 A/B：把 `cube_red` 用 `gz service -s /world/vision_grasp/set_pose` 挪到 y=0.30，再发**完全相同**的六关节目标 → `error_code: 0 / SUCCEEDED`。方块一移开就成功，确认是接触而非控制。
+
+### 踩坑记录
+
+1. **`ros2 action send_goal` 的 YAML 流式映射**：`{sec:6}` 会被解析成字符串 `"sec:6"`，报 `AttributeError("'Duration' object has no attribute 'sec:6'")`；必须写 `{sec: 6}`（冒号后要空格）。
+2. **JTC 拒绝只列部分关节的轨迹**：发 3 个关节直接 `Goal was rejected.`，必须列全 `arm_controller` 的 6 个关节（或开 `allow_partial_joints_goal`）。
+3. **`/grasp/execute` 是 service 不是 action**：`ros2 action send_goal ... arm_interfaces/action/GraspExecute` 报 `The passed action type is invalid`；正确调用是 `ros2 service call /grasp/execute arm_interfaces/srv/Grasp '{color: "red"}'`。
+4. **URDF 改动不会热生效**：`robot_state_publisher`、Gazebo 物理限位、`gz_ros2_control` 都只在启动时读一次 URDF。`--symlink-install` 下 `install/share` 是指向 `src` 的符号链接，改完源码不用重编译，但**必须重启 launch**。生效判据：`ros2 param get /robot_state_publisher robot_description | grep -c 'effort="100.0"'` 应返回 2。
+5. **`gz topic -e -t /world/<w>/dynamic_pose/info` 里两套坐标系混在一起**：机械臂的 link 是模型局部坐标（`base_link` 为原点），独立模型（方块）是 world 坐标；`base_link` 在 world `(-0.35, 0, 0.25)`。link 名带前缀，grep 要写 `name: ".*(link4|link5|tool0)"`，直接 `name: "(link4|..."` 匹配不到。
+6. **`tf2_echo` 的 timeout 太短会误报帧不存在**：`timeout 4 ros2 run tf2_ros tf2_echo base_link tcp` 报 `Invalid frame ID "base_link" ... frame does not exist`，实际是 TF 缓冲还没填满；改用 `/kinematics/solve_fk` 更可靠。
+
+### 下一步
+
+- README 与简历里的数字要用本轮实测值：定位误差 1–9 mm（新 base 系）、IK 93.3%、抬升 130/128/117 mm、零位 TCP 0.785 m。**96.7% 与 7.8 mm 都不能再用**（前者姿态错误，后者是旧 base 系）。
+- Phase 4：rosbag2 录制回放、MCP Server + DeepSeek 自然语言驱动抓取。
+- Windows 仓库与 VM `~/ros2_ws/src` 目前一致（VM 侧用单行 sed 打的补丁），但 VM 的 `~/ros2-vision-grasp` 是旧副本，`grasp_node.py` 仍是翻转姿态那版，别再从那里往 `~/ros2_ws/src` 覆盖。
+
 
 
 ---

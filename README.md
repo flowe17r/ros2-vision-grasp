@@ -2,9 +2,11 @@
 
 基于 ROS 2 Jazzy + Gazebo Harmonic 的机械臂视觉识别抓取项目（纯仿真，无需实体硬件）。
 
-当前进度：**Phase 3b 代码完成，待虚拟机验收**。Gazebo 世界中有工作台、红/绿/蓝三个可抓取的 5 cm 方块、一台俯视 RGB-D 相机和自建 6 轴机械臂；视觉链路输出检测结果与 `base_link` 下的 3D 目标（Phase 2 实测平均误差 7.8 mm），KDL 正逆解服务与抓取状态机已接入，抬升后用 Gazebo 位姿话题校验方块是否真的被抓起。
+当前进度：**Phase 3b 已验收（2026-10-19）**。Gazebo 世界中有工作台、红/绿/蓝三个可抓取的 5 cm 方块、一台俯视 RGB-D 相机和自建 6 轴机械臂；视觉链路输出检测结果与 `base_link` 下的 3D 目标，KDL 正逆解服务驱动抓取状态机，抬升后用 Gazebo 位姿话题校验方块是否真的被抓起。
 
-> 相机 TF 与定位真值已换算到台面上的 `base_link`，Phase 3b 验收时需重跑一次精度；IK 成功率与抓取结果未实测前不写进简历。
+实测：三色定位误差 **1–9 mm**（+x 为主），IK 成功率 **28/30 = 93.3%**（单位姿态、含 3 个方块目标，全部通过），三色抓取抬升 **red 130 mm / green 128 mm / blue 117 mm**，均 > 30 mm 门槛。
+
+> VMware 下 Gazebo 必须加 `LIBGL_ALWAYS_SOFTWARE=1` 前缀启动，否则 SVGA3D 渲染退化会让相机只输出背景色、检测全空（详见「常见问题」）。
 
 ## 环境
 
@@ -20,7 +22,7 @@
 
 ```bash
 # 1. 依赖
-sudo apt install -y ros-jazzy-ros-gz ros-jazzy-cv-bridge python3-opencv ros-jazzy-xacro ros-jazzy-joint-state-publisher-gui ros-jazzy-gz-ros2-control ros-jazzy-ros2-control ros-jazzy-ros2-controllers ros-jazzy-kdl-parser ros-jazzy-orocos-kdl libeigen3-dev
+sudo apt install -y ros-jazzy-ros-gz ros-jazzy-cv-bridge python3-opencv ros-jazzy-xacro ros-jazzy-joint-state-publisher-gui ros-jazzy-gz-ros2-control ros-jazzy-ros2-control ros-jazzy-ros2-controllers ros-jazzy-kdl-parser libeigen3-dev
 
 # 2. 仓库放家目录，再把 6 个包拷进工作空间
 cp -r <本仓库路径> ~/ros2-vision-grasp
@@ -49,6 +51,7 @@ ros2 topic hz /camera/image          # 有连续数据即可；虚拟机 RTF 低
 ros2 topic echo /perception/detections --once
 ros2 topic echo /perception/targets_base --once   # base_link 下的 3D 目标
 ros2 topic echo /perception/targets_3d --once     # 带颜色名的 3D 目标（抓取用）
+ros2 topic echo /model/cube_red/pose --once       # 方块真值位姿，抓取校验用
 ros2 control list_controllers        # 三个控制器均应为 active
 ros2 service list | grep kinematics  # /kinematics/solve_fk、/kinematics/solve_ik
 ros2 service call /grasp/execute arm_interfaces/srv/Grasp "{color: 'red'}"
@@ -86,7 +89,7 @@ tools/                  # 话题自检、IK 成功率采样脚本
 | `/perception/detect_debug` | `sensor_msgs/Image` | 节点输出 | 画框 + 质心 |
 | `/perception/targets_base` | `geometry_msgs/PoseArray` | 节点输出 | 深度反投影后的 3D 目标（base_link） |
 | `/perception/targets_3d` | `arm_interfaces/Target3DArray` | 节点输出 | 带颜色名的 3D 目标，抓取节点使用 |
-| `/world/vision_grasp/pose/info` | `tf2_msgs/TFMessage` | Gazebo → ROS | 模型世界位姿，用于校验方块是否被抬起 |
+| `/model/cube_{red,green,blue}/pose` | `geometry_msgs/Pose` | Gazebo → ROS | 方块模型的世界位姿，用于校验是否被抬起（`pose/info` 经桥接会丢失帧名，不用它） |
 
 服务：
 
@@ -123,7 +126,11 @@ ros2 param set /backproject_node sample_v_ratio 0.25
 
 真值（`arm_gazebo.launch.py`，base_link 在 world `(-0.35, 0, 0.25)`）：red (0.23, 0.10, 0.025)、green (0.35, -0.10, 0.025)、blue (0.47, 0.08, 0.025)。
 
-实测（2026-10-18）：red 9.3 mm、green 8.1 mm、blue 6.0 mm，平均 **7.8 mm**、最大 9.3 mm。
+Phase 2 实测（2026-10-18，`base_link` 与 world 原点重合的旧坐标系）：red 9.3 mm、green 8.1 mm、blue 6.0 mm，平均 **7.8 mm**、最大 9.3 mm。
+
+Phase 3b 集成后复测（2026-10-18，`base_link` 移到台面、相机 TF 改为 `(1.05, 0, 0.65)`）：`/perception/targets_3d` 输出 red (0.239, 0.099, 0.050)、green (0.358, −0.099, 0.050)、blue (0.476, 0.079, 0.051)，与真值 XY 误差 **1–9 mm**（x 偏 +6…+9 mm，y ≈1 mm）；z=0.050 是方块顶面（中心 0.025 + 半高 0.025），符合预期。**两组数字坐标系不同，不可混用。**
+
+> 已知偏差：机械臂进入相机视野后会遮挡方块，red 的 x 从 0.239 漂到 0.254（+15…24 mm）；`/model/cube_red/pose` 显示方块并未移动，偏差来自遮挡下的 HSV 分割，不是方块被推动。
 
 ## Phase 3a：机械臂与 ros2_control
 
@@ -151,17 +158,20 @@ ros2 action send_goal /arm_controller/follow_joint_trajectory control_msgs/actio
 ## Phase 3b：TCP、KDL 正逆解与抓取
 
 - `tcp` 固定在 `gripper_base` 下方 35 mm，KDL 链为 `base_link → tcp`。
+- **工具偏置**：`gripper_mount` 为 `tool0 → gripper_base` 的 `z = -0.03`，即 TCP 在 `tool0` 下方 65 mm。夹爪沿 TCP 的 −z 抓取，TCP 的 +z 必须朝上，`joint5`/`joint6` 因此要反向折约 127°，`link5` 的腕筒（r=32 mm）会被折到两指之间；不留这 60 mm 偏置，腕筒下探时会整根插进方块体积。
 - `joint5` 限位扩到 ±3.1 rad，使夹爪能朝下抓取；夹爪指间隙闭合 40 mm、张开 15 mm 时 70 mm，适配 50 mm 方块。
+- `joint2`/`joint3` 的 effort 由 30 提到 **100 N·m**：gz_ros2_control 的位置控制在远端目标处索取的力矩远大于重力矩（实测 joint2 79–93、joint3 38 N·m），30 会被削顶导致轨迹中止。
 - 三个方块改为动态刚体（50 g，摩擦 1.0），指垫摩擦 5.0。
 - `/kinematics/solve_ik` 使用 KDL LMA，先试调用方种子，再试当前关节角、零位与 8 组随机种子；结果必须满足关节限位、位置误差 < 5 mm、姿态误差 < 0.1 rad。
-- 抓取状态机：开爪 → 预抓取（z=0.16）→ 下降（z=0.032）→ 闭合 → 抬升（z=0.18），用 `/world/vision_grasp/pose/info` 比较方块抬升前后的 z，只有抬升 > 30 mm 才返回成功。
+- 抓取状态机：开爪 → 预抓取（z=0.16）→ 下降（z=**0.050**）→ 闭合 → 抬升（z=0.18），用 `/model/cube_<color>/pose` 比较方块抬升前后的 z，只有抬升 > 30 mm 才返回成功。
+  - 下降高度不能低于 0.040：腕筒最低点约在 TCP + 10 mm，方块顶面 0.050，再低就会顶住方块，JTC 以 `goal_time_tolerance` 中止。IK 失败时的回退档位因此只往上加（+0.015 / +0.03）。
 
 ```bash
-# 正解自检：零位时 tcp 约在 base_link 上方 0.845 m
+# 正解自检：零位时 tcp 约在 base_link 上方 0.785 m
 ros2 service call /kinematics/solve_fk arm_interfaces/srv/SolveFK "{joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
 
-# 逆解单点：红色方块正上方，夹爪朝下
-ros2 service call /kinematics/solve_ik arm_interfaces/srv/SolveIK "{target: {position: {x: 0.23, y: 0.10, z: 0.032}, orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}}, seed: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
+# 逆解单点：红色方块抓取位姿，TCP 的 +z 朝上（单位姿态）
+ros2 service call /kinematics/solve_ik arm_interfaces/srv/SolveIK "{target: {position: {x: 0.23, y: 0.10, z: 0.05}, orientation: {w: 1.0}}, seed: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
 
 # 抓取红色方块
 ros2 service call /grasp/execute arm_interfaces/srv/Grasp "{color: 'red'}"
@@ -170,11 +180,20 @@ ros2 service call /grasp/execute arm_interfaces/srv/Grasp "{color: 'red'}"
 python3 ~/ros2-vision-grasp/tools/ik_benchmark.py
 ```
 
+## Phase 3b 完成标准（已验收 2026-10-19）
+
+- [x] 七个包在虚拟机 `colcon build --symlink-install` 全部通过
+- [x] `joint_state_broadcaster` / `arm_controller` / `gripper_controller` 三个控制器 active
+- [x] 零位正解 TCP z = **0.785 m**（工具偏置后的新链路）
+- [x] `/perception/targets_3d` 三色输出与真值 XY 误差 1–9 mm
+- [x] IK 成功率 **28/30 = 93.3%**（单位姿态；3 个方块目标全部通过，2 个失败点是 `(0.22, 0.00)` 正前方近距离，肘部内折超出 joint3 ±2.5）
+- [x] 三色抓取并抬升 > 30 mm：**red 130 mm / green 128 mm / blue 117 mm**（同一次干净启动内连续完成）
+
 ## Phase 2 完成标准（已验收 2026-10-18）
 
 - [x] `ros2 run tf2_ros tf2_echo base_link camera_optical_frame` 能查到位姿
 - [x] `/perception/targets_base` 一次输出 3 个位置，x/y 与真值同号、量级一致
-- [x] `XY error vs cube center` 的 mean < 10 mm（实测 7.8 mm）
+- [x] `XY error vs cube center` 的 mean < 10 mm（旧 `base_link` 系实测 7.8 mm；集成后见上文 1–9 mm）
 - [x] 采样位置固定为 `sample_v_ratio=0.3`，精度已达标
 
 ## 常见问题
@@ -188,13 +207,17 @@ gz topic -l | grep -Ei 'camera|image|depth'
 
 本 world 通过 `<topic>camera</topic>` 指定，正常情况下是 `/camera/image`、`/camera/camera_info`、`/camera/depth_image`。若名字不同，按实际名字修改 `src/arm_bringup/launch/vision.launch.py` 中 bridge 的 arguments。
 
-**Gazebo 黑屏 / 相机画面全黑**
-VMware 需开启「加速 3D 图形」并给足显存（≥ 2 GB）。仍不行时试：
+**相机只输出纯色 / 检测为 0 个目标**
+VMware SVGA3D 渲染退化时的特征很明确，不是黑屏：`/camera/image` 是 640×480 rgb8 但 mean≈224、min 221、max 229（只有背景色），`/camera/depth_image` 32FC1 全 `inf`；相机位姿、光照、launch 日志全都正常。用软件渲染（llvmpipe，OpenGL 4.5）绕开：
 
 ```bash
-export LIBGL_ALWAYS_SOFTWARE=1
-gz sim -r <world 路径>
+LIBGL_ALWAYS_SOFTWARE=1 ros2 launch arm_bringup arm_gazebo.launch.py use_rviz:=false
 ```
+
+启动前用 `pgrep -a gz` 确认只有一个 Gazebo 实例；两个 `gz sim` 会让 spawner 以 exit code 1 退出、话题互相干扰。
+
+**抓取在 descend 阶段返回 `action status 6`**
+`/rosout` 里 JTC 的原话是关键判据：`Aborted due to goal_time_tolerance` 表示手臂停在某个位置再也下不去（有硬阻挡），`path tolerance violation` 才是跟踪跟不上。用 `ros2 topic echo /joint_states --once` 看 effort —— 顶到 URDF 上限说明该关节被削顶，六个关节都远离位置限位却速度为 0，就是被实体顶住了。定位接触体用 `gz topic -e -t /world/vision_grasp/dynamic_pose/info`（机械臂 link 是模型局部坐标，方块是 world 坐标，`base_link` 在 world `(-0.35, 0, 0.25)`，两者要换算）。
 
 **编译找不到 arm_interfaces**
 `arm_interfaces` 生成消息后其他包才能编译，`colcon build` 会自动排序；若仍失败，先单独 `colcon build --packages-select arm_interfaces`。
@@ -212,10 +235,10 @@ gz sim -r <world 路径>
 | Phase | 内容 | 产出 |
 | --- | --- | --- |
 | 1（已完成） | 仿真世界 + HSV 检测 | 检测消息、debug 图、耗时数据（26 ms）|
-| 2（已完成） | TF2 + 针孔反投影 | 基座坐标系目标位姿，实测平均误差 7.8 mm |
+| 2（已完成） | TF2 + 针孔反投影 | 基座坐标系目标位姿，集成后 XY 误差 1–9 mm |
 | 3a（已完成） | ros2_control + 关节轨迹控制 | 六个关节 + 夹爪可控，动作接口验证通过 |
-| 3b（当前） | KDL 正逆解 + 抓取状态机 | 仿真中完成抓取，统计逆解成功率 |
-| 4 | rosbag2 录制回放 + MCP Server + DeepSeek 工具调用 | 自然语言驱动抓取 |
+| 3b（已完成） | KDL 正逆解 + 抓取状态机 | 三色抓取抬升 130/128/117 mm，IK 成功率 93.3% |
+| 4（当前） | rosbag2 录制回放 + MCP Server + DeepSeek 工具调用 | 自然语言驱动抓取 |
 | 5 | socat 虚拟串口 + AA55/CRC16 协议桥 | MCU ↔ ROS2 通信演示 |
 
 ## License

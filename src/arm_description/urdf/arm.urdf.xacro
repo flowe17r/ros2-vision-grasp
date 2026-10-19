@@ -79,7 +79,7 @@
     <child link="link2"/>
     <origin xyz="0 0 0.12" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-2.0" upper="2.0" effort="30.0" velocity="1.5"/>
+    <limit lower="-2.0" upper="2.0" effort="100.0" velocity="1.5"/>
     <dynamics damping="0.2" friction="0.05"/>
   </joint>
   <link name="link2">
@@ -109,7 +109,9 @@
     <child link="link3"/>
     <origin xyz="0 0 0.30" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-2.5" upper="2.5" effort="30.0" velocity="1.5"/>
+    <!-- effort 30 时远端目标（blue x≈0.48）descend 会被削顶，JTC 报 state tolerance；
+         gz_ros2_control 的位置 PID 起步索取力矩远大于重力矩（实测约 2 N·m），故与 joint2 同放到 100 -->
+    <limit lower="-2.5" upper="2.5" effort="100.0" velocity="1.5"/>
     <dynamics damping="0.2" friction="0.05"/>
   </joint>
   <link name="link3">
@@ -223,11 +225,16 @@
     </inertial>
   </link>
 
-  <!-- gripper base -->
+  <!--
+    工具偏置：TCP +z 必须朝上，joint5/joint6 就得反向折约 127°，link5 的腕筒
+    被折到两指正中间、深到与指尖同高，下探时整个插进方块体积（指间净空 70 mm，
+    装不下腕筒 64 mm + 方块 50 mm）。夹爪整体下移 60 mm，TCP 落到 tool0 下方
+    65 mm，腕部才能留在物体上方。
+  -->
   <joint name="gripper_mount" type="fixed">
     <parent link="tool0"/>
     <child link="gripper_base"/>
-    <origin xyz="0 0 0.03" rpy="0 0 0"/>
+    <origin xyz="0 0 -0.03" rpy="0 0 0"/>
   </joint>
   <link name="gripper_base">
     <visual>

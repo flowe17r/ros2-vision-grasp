@@ -2,8 +2,13 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    RegisterEventHandler,
+)
 from launch.conditions import IfCondition, UnlessCondition
+from launch.event_handlers import OnProcessExit
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -58,7 +63,9 @@ def generate_launch_description():
             '/camera/image@sensor_msgs/msg/Image[gz.msgs.Image',
             '/camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
             '/camera/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
-            '/world/vision_grasp/pose/info@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
+            '/model/cube_red/pose@geometry_msgs/msg/Pose[gz.msgs.Pose',
+            '/model/cube_green/pose@geometry_msgs/msg/Pose[gz.msgs.Pose',
+            '/model/cube_blue/pose@geometry_msgs/msg/Pose[gz.msgs.Pose',
         ],
         parameters=[{'use_sim_time': True}],
         output='screen',
@@ -92,6 +99,8 @@ def generate_launch_description():
         arguments=[
             'joint_state_broadcaster',
             '--controller-manager', '/controller_manager',
+            '--controller-manager-timeout', '120',
+            '--switch-timeout', '60',
         ],
         output='screen',
     )
@@ -102,6 +111,8 @@ def generate_launch_description():
         arguments=[
             'arm_controller',
             '--controller-manager', '/controller_manager',
+            '--controller-manager-timeout', '120',
+            '--switch-timeout', '60',
         ],
         output='screen',
     )
@@ -112,6 +123,8 @@ def generate_launch_description():
         arguments=[
             'gripper_controller',
             '--controller-manager', '/controller_manager',
+            '--controller-manager-timeout', '120',
+            '--switch-timeout', '60',
         ],
         output='screen',
     )
@@ -217,6 +230,18 @@ def generate_launch_description():
         output='screen',
     )
 
+    # 软件渲染下 controller_manager 初始化慢，等机械臂生成完成后再拉起控制器
+    start_controllers = RegisterEventHandler(
+        OnProcessExit(
+            target_action=spawn_arm,
+            on_exit=[
+                joint_state_broadcaster,
+                arm_controller,
+                gripper_controller,
+            ],
+        )
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument(
             'use_rviz',
@@ -238,9 +263,7 @@ def generate_launch_description():
         bridge,
         robot_state_publisher,
         spawn_arm,
-        joint_state_broadcaster,
-        arm_controller,
-        gripper_controller,
+        start_controllers,
         camera_tf,
         camera_optical_tf,
         hsv_segment,

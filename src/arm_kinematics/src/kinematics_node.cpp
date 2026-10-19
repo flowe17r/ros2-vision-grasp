@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <random>
@@ -229,7 +230,7 @@ private:
 
     for (const auto & candidate : seeds) {
       KDL::JntArray q_out(n_joints_);
-      if (ik_solver_->JntToCart(candidate, q_out, target) < 0) {
+      if (ik_solver_->CartToJnt(candidate, target, q_out) < 0) {
         continue;
       }
 

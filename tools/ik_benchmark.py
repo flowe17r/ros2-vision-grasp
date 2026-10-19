@@ -16,15 +16,13 @@ from arm_interfaces.srv import SolveIK
 CUBES = [(0.23, 0.10), (0.35, -0.10), (0.47, 0.08)]
 
 
-def topdown_pose(x, y, z):
+def grasp_pose(x, y, z):
+    # 夹爪沿 TCP 的 -z 抓取，TCP 的 +z 必须朝上，即单位姿态（与 grasp_node 一致）
     pose = Pose()
     pose.position.x = float(x)
     pose.position.y = float(y)
     pose.position.z = float(z)
-    pose.orientation.x = 1.0
-    pose.orientation.y = 0.0
-    pose.orientation.z = 0.0
-    pose.orientation.w = 0.0
+    pose.orientation.w = 1.0
     return pose
 
 
@@ -42,13 +40,13 @@ def main():
             (0.22, 0.35, 0.48), (-0.12, 0.0, 0.12), (0.03, 0.10, 0.17)):
         targets.append((x, y, z, 'grid'))
     for x, y in CUBES:
-        targets.append((x, y, 0.032, 'cube'))
+        targets.append((x, y, 0.050, 'cube'))
 
     success = 0
     failures = []
     for x, y, z, kind in targets:
         request = SolveIK.Request()
-        request.target = topdown_pose(x, y, z)
+        request.target = grasp_pose(x, y, z)
         request.seed = [0.0] * 6
         future = client.call_async(request)
         rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
