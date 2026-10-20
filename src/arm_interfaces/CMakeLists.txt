@@ -11,9 +11,11 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Detection2DArray.msg"
   "msg/Target3D.msg"
   "msg/Target3DArray.msg"
+  "msg/McuStatus.msg"
   "srv/SolveIK.srv"
   "srv/SolveFK.srv"
   "srv/Grasp.srv"
+  "srv/SendJoints.srv"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

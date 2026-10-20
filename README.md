@@ -2,7 +2,7 @@
 
 基于 ROS 2 Jazzy + Gazebo Harmonic 的机械臂视觉识别抓取项目（纯仿真，无需实体硬件）。
 
-当前进度：**Phase 3b 已验收（2026-10-19）**。Gazebo 世界中有工作台、红/绿/蓝三个可抓取的 5 cm 方块、一台俯视 RGB-D 相机和自建 6 轴机械臂；视觉链路输出检测结果与 `base_link` 下的 3D 目标，KDL 正逆解服务驱动抓取状态机，抬升后用 Gazebo 位姿话题校验方块是否真的被抓起。
+当前进度：**Phase 4 / Phase 5 均已验收（2026-10-20）**。Gazebo 世界中有工作台、红/绿/蓝三个可抓取的 5 cm 方块、一台俯视 RGB-D 相机和自建 6 轴机械臂；视觉链路输出检测结果与 `base_link` 下的 3D 目标，KDL 正逆解服务驱动抓取状态机，抬升后用 Gazebo 位姿话题校验方块是否真的被抓起；MCP Server 让中文指令经大模型驱动实抓；`arm_serial` 通过 socat 虚拟串口与 MCU 模拟器跑通 AA55/CRC16 协议。
 
 实测：三色定位误差 **1–9 mm**（+x 为主），IK 成功率 **28/30 = 93.3%**（单位姿态、含 3 个方块目标，全部通过），三色抓取抬升 **red 130 mm / green 128 mm / blue 117 mm**，均 > 30 mm 门槛。
 
@@ -16,7 +16,7 @@
 | ROS 2 | Jazzy Jalisco |
 | 仿真 | Gazebo Harmonic（`ros-jazzy-ros-gz`） |
 | 控制 | ros2_control + gz_ros2_control |
-| 语言 | Python 3.12（感知节点）、C++（后续 KDL 运动学） |
+| 语言 | Python 3.12（感知/抓取/MCP）、C++17（KDL 运动学、串口桥） |
 
 ## 快速开始（虚拟机内执行）
 
@@ -24,7 +24,7 @@
 # 1. 依赖
 sudo apt install -y ros-jazzy-ros-gz ros-jazzy-cv-bridge python3-opencv ros-jazzy-xacro ros-jazzy-joint-state-publisher-gui ros-jazzy-gz-ros2-control ros-jazzy-ros2-control ros-jazzy-ros2-controllers ros-jazzy-kdl-parser ros-jazzy-rosbag2 libeigen3-dev
 
-# 2. 仓库放家目录，再把 7 个包拷进工作空间
+# 2. 仓库放家目录，再把 8 个包拷进工作空间
 cp -r <本仓库路径> ~/ros2-vision-grasp
 mkdir -p ~/ros2_ws/src
 cp -r ~/ros2-vision-grasp/src/* ~/ros2_ws/src/
@@ -70,9 +70,10 @@ src/
 ├── arm_kinematics/     # KDL 正逆解服务（C++）
 ├── arm_grasp/          # 抓取状态机（Python）
 ├── arm_mcp/            # MCP Server：把感知/运动学/抓取包成 LLM 可调用的工具
+├── arm_serial/         # AA55/CRC16 串口桥（C++）：虚拟 MCU ↔ ROS 2
 └── arm_bringup/        # vision.launch.py（仅视觉）、arm_gazebo.launch.py（全系统）
 docs/                   # 开发日志、面试笔记
-tools/                  # 话题自检、IK 成功率采样、rosbag 录制与离线报告、自然语言抓取
+tools/                  # 话题自检、IK 采样、rosbag 报告、自然语言抓取、MCU 模拟器
 .github/workflows/      # CI：colcon build + test
 ```
 
@@ -91,6 +92,8 @@ tools/                  # 话题自检、IK 成功率采样、rosbag 录制与�
 | `/perception/targets_base` | `geometry_msgs/PoseArray` | 节点输出 | 深度反投影后的 3D 目标（base_link） |
 | `/perception/targets_3d` | `arm_interfaces/Target3DArray` | 节点输出 | 带颜色名的 3D 目标，抓取节点使用 |
 | `/model/cube_{red,green,blue}/pose` | `geometry_msgs/Pose` | Gazebo → ROS | 方块模型的世界位姿，用于校验是否被抬起（`pose/info` 经桥接会丢失帧名，不用它） |
+| `/mcu/status` | `arm_interfaces/McuStatus` | 串口桥输出 | MCU 状态：uptime、温度、错误码、6 路编码器、双侧 CRC 计数 |
+| `/mcu/joint_states` | `sensor_msgs/JointState` | 串口桥输出 | 编码器换算出的 joint1..joint6 |
 
 服务：
 
@@ -99,6 +102,8 @@ tools/                  # 话题自检、IK 成功率采样、rosbag 录制与�
 | `/kinematics/solve_fk` | `arm_interfaces/SolveFK` | 关节角 → `tcp` 位姿 |
 | `/kinematics/solve_ik` | `arm_interfaces/SolveIK` | `tcp` 目标位姿 + 种子 → 关节角（多种子重试、限位与误差校验） |
 | `/grasp/execute` | `arm_interfaces/Grasp` | 按颜色执行一次完整抓取 |
+| `/serial/send_joints` | `arm_interfaces/SendJoints` | 6 个目标角打包成串口帧，等 MCU ACK |
+| `/serial/ping` | `std_srvs/Trigger` | 串口链路连通性测试 |
 
 参数：`hsv_segment_node` 支持 `image_topic`、`target_color`（red/green/blue）、`open_kernel`、`close_kernel`；`box_detect_node` 支持 `image_topic`、`colors`、`min_area_px`；`backproject_node` 支持 `camera_frame`、`target_frame`、`depth_patch`、`sample_u_ratio`、`sample_v_ratio`、`max_sync_gap_sec`、`eval_ground_truth`。
 
@@ -255,6 +260,67 @@ python3 ~/ros2-vision-grasp/tools/nl_grasp.py --dry-run "绿色的方块在哪"
 - [x] `nl_grasp.py --dry-run` 能拿到模型的工具调用计划（GLM-4.5-Flash 两轮：`list_targets` → `grasp` 预演 → 中文总结）
 - [x] `nl_grasp.py "把绿色方块抓起来"` 真实驱动抓取并回报抬升量（`grasp verified, cube lifted **128 mm**`，两轮收敛；同一次验收中 red 为 130 mm）
 
+## Phase 5：socat 虚拟串口 + AA55/CRC16 协议桥
+
+没有实体 MCU，用一对 PTY 模拟「下位机 ↔ 串口」。`arm_serial` 是 C++ 桥：termios 115200 8N1 + `poll()` 读线程，负责帧编解码、ACK 重试和 ROS 话题/服务转换；`tools/mcu_sim.py` 是协议对端，10 Hz 上报状态，按 0.8 rad/s 跟踪关节目标。
+
+```bash
+sudo apt install -y socat        # 只装一次
+
+# 终端 A：建立 /tmp/ttyMCU <-> /tmp/ttyROS
+bash ~/ros2-vision-grasp/tools/serial_demo.sh
+
+# 终端 B：MCU 模拟器（加 --corrupt-every 20 可每 20 帧损坏一次 CRC）
+python3 ~/ros2-vision-grasp/tools/mcu_sim.py
+
+# 终端 C：串口桥
+source ~/ros2_ws/install/setup.bash
+ros2 run arm_serial serial_bridge --ros-args -p port:=/tmp/ttyROS
+
+# 终端 D：联调
+ros2 topic hz /mcu/status
+ros2 service call /serial/ping std_srvs/srv/Trigger
+ros2 service call /serial/send_joints arm_interfaces/srv/SendJoints "{positions: [0.0, 0.3, -0.4, 0.0, 0.4, 0.0]}"
+ros2 topic echo /mcu/joint_states --once
+```
+
+帧格式（小端）：
+
+| 字段 | 长度 | 说明 |
+| --- | --- | --- |
+| `AA 55` | 2 | 帧头 |
+| version | 1 | 固定 `0x01` |
+| cmd | 1 | 见下表 |
+| seq | 1 | 请求/应答序号，回绕到 0 |
+| len | 1 | payload 长度，最大 64 |
+| payload | len | 最多 64 字节 |
+| crc | 2 | CRC16-CCITT-FALSE（poly `0x1021`，init `0xFFFF`），覆盖 version..payload，低字节在前 |
+
+| cmd | 值 | payload | 说明 |
+| --- | --- | --- | --- |
+| PING | `0x01` | 空 | 连通性测试 |
+| SET_JOINTS | `0x02` | 6×float32（24 B） | joint1..joint6 目标角（rad） |
+| GET_STATUS | `0x03` | 空 | 主动查询状态 |
+| ACK | `0x10` | 原 cmd, seq, result | result 0 为成功 |
+| STATUS | `0x11` | 38 B | `uint32 uptime_ms, float32 温度, uint16 错误码, 6×float32 编码器, uint32 MCU CRC 错误数` |
+| ERROR | `0x7F` | seq, 错误码 | 未知指令或参数长度错误 |
+
+桥对 `SET_JOINTS` / `PING` 采用「等 ACK + 超时重发」，默认 500 ms、3 次；收到坏 CRC 只计数不回应，解析器会自动重新找帧头。`/mcu/status` 里 `mcu_crc_errors` 是模拟器拒收的帧数，`bridge_crc_errors` 是桥拒收的帧数。
+
+```bash
+# 协议层单测：CRC 已知向量、回环、粘包、坏帧恢复、超长帧
+colcon test --packages-select arm_serial --event-handlers console_direct+
+# 不启 socat 也能跑模拟器自检
+python3 ~/ros2-vision-grasp/tools/mcu_sim.py --self-test
+```
+
+### Phase 5 完成标准（已验收 2026-10-20）
+
+- [x] `colcon test --packages-select arm_serial` 8/8 通过；`mcu_sim.py --self-test` 通过
+- [x] `/serial/ping` 返回 `success=True, message='pong, seq=1'`
+- [x] `/serial/send_joints` 返回 `success=True, seq=2`，`/mcu/joint_states` 到达 `[0, 0.3, -0.4, 0, 0.4, 0]`
+- [x] `/mcu/status` 实测 9.995–9.999 Hz；`--corrupt-every 20` 时 `bridge_crc_errors` 递增、桥持续运行
+
 ## Phase 2 完成标准（已验收 2026-10-18）
 
 - [x] `ros2 run tf2_ros tf2_echo base_link camera_optical_frame` 能查到位姿
@@ -305,7 +371,7 @@ LIBGL_ALWAYS_SOFTWARE=1 ros2 launch arm_bringup arm_gazebo.launch.py use_rviz:=f
 | 3a（已完成） | ros2_control + 关节轨迹控制 | 六个关节 + 夹爪可控，动作接口验证通过 |
 | 3b（已完成） | KDL 正逆解 + 抓取状态机 | 三色抓取抬升 130/128/117 mm，IK 成功率 93.3% |
 | 4（已完成） | rosbag2 录制回放 + MCP Server + 大模型工具调用 | 离线报告复现 red 抬升 129 mm；中文指令实抓 green 128 mm |
-| 5 | socat 虚拟串口 + AA55/CRC16 协议桥 | MCU ↔ ROS2 通信演示 |
+| 5（已完成） | socat 虚拟串口 + AA55/CRC16 协议桥 | 10 Hz 状态帧、服务 ACK、CRC 注入重同步验证 |
 
 ## License
 

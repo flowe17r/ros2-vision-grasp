@@ -1,0 +1,6 @@
+# 六个关节目标角（rad），按 joint1..joint6 顺序
+float64[6] positions
+---
+bool success
+string message
+uint8 seq

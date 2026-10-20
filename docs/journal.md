@@ -193,7 +193,7 @@
 
 - Phase 4c 已于 10-20 用免费的智谱 GLM-4.5-Flash 验收，不需要 DeepSeek key，详见下一节。
 - `arm_mcp` 还没接进任何 launch 文件（按需手动起），不建议现在加开关：MCP Server 是给外部客户端用的常驻进程，塞进 launch 反而会和手动的进程抢同一套订阅。
-- GitHub push 仍未成功：本机连 `github.com:443` 超时（`api.github.com` 正常），`origin/main` 停在 `d470452`，本地已领先 3 个 commit（含 Phase 3b 验收那次提交）。README 现在描述的是未 push 的状态，投递前必须先把仓库推上去。
+- GitHub push 已于 10-20 成功：`d470452..8b4d2d8`，origin/main 与本地一致，README 里不再有未推送内容。
 
 ## 2026-10-20 Phase 4c 验收（GLM-4.5-Flash）
 
@@ -217,7 +217,32 @@
 
 - Phase 4 全部验收完成，README 与简历可以写「自然语言驱动抓取 + rosbag 离线复现」。
 - 演示前重启 launch 重置世界，确保三色方块都在桌面。
-- push 仍被本机网络卡住，`github.com:443` 不通；恢复后先提交 Phase 4 再推。
+- Phase 4 已提交并 push（`8b4d2d8`），README、ros.html 与 PDF 均已同步。
+
+## 2026-10-20 Phase 5：虚拟串口与 AA55/CRC16 协议桥（已验收 2026-10-20）
+
+### 设计
+
+没有实体 MCU，用 socat 建一对 PTY：`/tmp/ttyMCU` 给模拟器，`/tmp/ttyROS` 给 C++ 桥。
+
+- `arm_serial`（ament_cmake）：termios raw 115200 8N1，`poll()` 100 ms 读线程；`FrameParser` 状态机负责帧头搜索、长度上限、CRC 校验和错误计数。服务线程与读线程用 seq + condition_variable 对齐 ACK，超时 500 ms、重试 3 次。`SET_JOINTS` / `PING` 是服务，`STATUS` 转成 `/mcu/status` 和 `/mcu/joint_states`。
+- `tools/mcu_sim.py`：协议对端，10 Hz 上报 38 字节状态，按 0.8 rad/s 向目标角靠拢；`--corrupt-every N` 每 N 帧破坏一次 CRC，用来看桥的计数与重同步；`--self-test` 不依赖串口。
+- 接口：`arm_interfaces/McuStatus.msg`、`arm_interfaces/SendJoints.srv`，包数 7 → 8。
+
+### 关键取舍
+
+- **不直接发 `/joint_states`**：那是 ros2_control 的状态输出，桥再发布会互相覆盖；单开 `/mcu/joint_states`，需要时再 relay。
+- **ACK 带原 seq**：8 位序号会回绕，但 `transact_mutex_` 保证同一时刻只有一个事务在等，命中旧 ACK 的概率可忽略。
+- **帧长上限 64**：STATUS 38 字节足够；超限直接判长度错误并重新找帧头，避免错位的长度字节把解析器卡死。
+- **坏帧只计数不回应**：串口没有可靠重传通道，桥靠超时重发，两端各自重同步。
+
+### 验收结果（2026-10-20，虚拟机）
+
+- 编译：`colcon build --packages-select arm_interfaces arm_serial` → **2 packages finished**（arm_interfaces 33.5 s、arm_serial 25.0 s）。构建时提示 `arm_interfaces` 同时存在于 `~/ros2_ws/install`（underlay）和本次 overlay，属于同一工作空间的正常提示，不需要 `--allow-overriding`。
+- 协议层：`colcon test --packages-select arm_serial` → **8/8 gtest 通过**；`mcu_sim.py --self-test` 输出 `self-test ok: CRC 已知向量 / 回环 / 坏帧计数 / 粘包 / reset`。
+- 链路：socat 建 `/tmp/ttyMCU` ↔ `/tmp/ttyROS`，模拟器 10 Hz 上报。`/mcu/status` 实测 **9.995–9.999 Hz**（min 0.099 s / max 0.101 s）。
+- 命令：`/serial/ping` → `success=True, message='pong, seq=1'`；`/serial/send_joints` → `success=True, message='ok', seq=2`；`/mcu/joint_states` 的 position 精确到 `[0, 0.3, -0.4, 0, 0.4, 0]`（float32 精度）。
+- 坏帧：`mcu_sim.py --corrupt-every 20`（每 20 帧状态损坏一次 CRC）后，`/mcu/status` 的 `bridge_crc_errors` 从 9 增到 12（约 7 s），桥日志每 2 s 打一条 `CRC 校验失败累计 N 帧`，状态话题持续发布、进程不退出，证明坏帧被丢弃且解析器自动重同步。
 
 ---
 

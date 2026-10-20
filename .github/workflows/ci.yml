@@ -17,7 +17,8 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             python3-colcon-common-extensions \
-            ros-jazzy-ros-gz ros-jazzy-cv-bridge python3-opencv
+            ros-jazzy-ros-gz ros-jazzy-cv-bridge python3-opencv \
+            ros-jazzy-ament-cmake-gtest
           rosdep update --rosdistro jazzy
           rosdep install --from-paths src --ignore-src -y --rosdistro jazzy
 
