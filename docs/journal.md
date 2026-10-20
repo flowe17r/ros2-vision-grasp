@@ -247,3 +247,20 @@
 ---
 
 <!-- 后续按日期追加：做了什么 / 遇到什么错误 / 根因 / 怎么验证 -->
+
+## 2026-10-20 CI 加固：安装依赖失败重试
+
+### 现象
+
+GitHub Actions 在 `310f419`（Phase 5）与 `8b4d2d8`（Phase 4）两次运行的 `Install dependencies` 步骤失败（exit 1），Build/Test 被跳过；而 `d470452` 的同一套 apt/rosdep 命令成功（install 163 s）。三次运行中该步骤耗时在 87–200 s 间波动，判断为 apt 源或 `rosdep update`（raw.githubusercontent.com）的网络抖动，而不是依赖键缺失。GitHub 对未登录用户不返回步骤日志（API 403、log fragment 404），未能拿到具体报错行。
+
+### 改动
+
+- `.github/workflows/ci.yml` 的安装步骤改为 `shell: bash` + 3 次重试（15 s、30 s 退避），覆盖 `apt-get update`、`apt-get install`、`rosdep update`、`rosdep install`；步骤超时 20 分钟，避免网络挂死占满 6 小时。
+- 未移除 rosdep：`package.xml` 中的依赖键在 10-18 已全部解析成功，保留自动解析可以避免手写包名漏项。
+- 重试仍失败时，把最后 5 行命令输出通过 `::error::` 写成运行注解；这样即使拿不到原始日志，也能从公开的 annotations API 看到真实报错。
+
+### 验证
+
+- 本地用 `js-yaml` 解析工作流，确认 YAML 合法、安装步骤包含 4 个重试入口。
+- 真实结果以 push `ci.yml` 后的 GitHub Actions 运行为准；若仍失败，再根据运行耗时决定是否改为显式 apt 包列表。
