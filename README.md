@@ -22,9 +22,9 @@
 
 ```bash
 # 1. 依赖
-sudo apt install -y ros-jazzy-ros-gz ros-jazzy-cv-bridge python3-opencv ros-jazzy-xacro ros-jazzy-joint-state-publisher-gui ros-jazzy-gz-ros2-control ros-jazzy-ros2-control ros-jazzy-ros2-controllers ros-jazzy-kdl-parser libeigen3-dev
+sudo apt install -y ros-jazzy-ros-gz ros-jazzy-cv-bridge python3-opencv ros-jazzy-xacro ros-jazzy-joint-state-publisher-gui ros-jazzy-gz-ros2-control ros-jazzy-ros2-control ros-jazzy-ros2-controllers ros-jazzy-kdl-parser ros-jazzy-rosbag2 libeigen3-dev
 
-# 2. 仓库放家目录，再把 6 个包拷进工作空间
+# 2. 仓库放家目录，再把 7 个包拷进工作空间
 cp -r <本仓库路径> ~/ros2-vision-grasp
 mkdir -p ~/ros2_ws/src
 cp -r ~/ros2-vision-grasp/src/* ~/ros2_ws/src/
@@ -69,9 +69,10 @@ src/
 ├── arm_perception/     # HSV 分割节点、方块检测节点、反投影节点
 ├── arm_kinematics/     # KDL 正逆解服务（C++）
 ├── arm_grasp/          # 抓取状态机（Python）
+├── arm_mcp/            # MCP Server：把感知/运动学/抓取包成 LLM 可调用的工具
 └── arm_bringup/        # vision.launch.py（仅视觉）、arm_gazebo.launch.py（全系统）
 docs/                   # 开发日志、面试笔记
-tools/                  # 话题自检、IK 成功率采样脚本
+tools/                  # 话题自检、IK 成功率采样、rosbag 录制与离线报告、自然语言抓取
 .github/workflows/      # CI：colcon build + test
 ```
 
@@ -182,12 +183,77 @@ python3 ~/ros2-vision-grasp/tools/ik_benchmark.py
 
 ## Phase 3b 完成标准（已验收 2026-10-19）
 
-- [x] 七个包在虚拟机 `colcon build --symlink-install` 全部通过
+- [x] 六个包在虚拟机 `colcon build --symlink-install` 全部通过
 - [x] `joint_state_broadcaster` / `arm_controller` / `gripper_controller` 三个控制器 active
 - [x] 零位正解 TCP z = **0.785 m**（工具偏置后的新链路）
 - [x] `/perception/targets_3d` 三色输出与真值 XY 误差 1–9 mm
 - [x] IK 成功率 **28/30 = 93.3%**（单位姿态；3 个方块目标全部通过，2 个失败点是 `(0.22, 0.00)` 正前方近距离，肘部内折超出 joint3 ±2.5）
 - [x] 三色抓取并抬升 > 30 mm：**red 130 mm / green 128 mm / blue 117 mm**（同一次干净启动内连续完成）
+
+## Phase 4：rosbag2 离线复现与 MCP / 大模型自然语言抓取
+
+**4a rosbag2**：录一次抓取，之后不开 Gazebo 也能复现和出验收报告。
+
+```bash
+# 录制（终端 A，仿真已在跑）。data 只录小话题，一分钟几 MB
+bash ~/ros2-vision-grasp/tools/bag_record.sh data
+
+# 需要连相机图像一起录时用 vision，自动按 200 MB 分卷；第三个参数是时长（秒）
+bash ~/ros2-vision-grasp/tools/bag_record.sh vision ~/bags/vision_demo 30
+
+# 另开终端 B 触发抓取，录完 Ctrl+C
+ros2 service call /grasp/execute arm_interfaces/srv/Grasp "{color: 'red'}"
+
+# 离线报告：话题消息数、三色目标轨迹、方块抬升量与水平漂移、末帧关节角
+python3 ~/ros2-vision-grasp/tools/bag_report.py ~/bags/grasp_xxxxx
+
+# 回放（--clock 让 use_sim_time 的节点跟上包里的时间）
+ros2 bag play ~/bags/grasp_xxxxx --clock
+```
+
+`data` profile 录 `/perception/detections`、`/perception/targets_3d`、三个 `/model/cube_*/pose`、`/joint_states`、`/tf`、`/tf_static`；`vision` 再加 `/camera/image`、`/camera/camera_info`、`/camera/depth_image`。`bag_report.py` 从 `metadata.yaml` 读 `storage_identifier`，sqlite3 与 mcap 包都能读。
+
+**4b MCP Server**：`arm_mcp` 包用标准库实现 MCP 的 stdio JSON-RPC 2.0（`initialize` / `tools/list` / `tools/call` / `ping`），不依赖 pip 的 mcp SDK；内部起一个 rclpy 节点，把 ROS 侧能力暴露成 6 个工具：
+
+| 工具 | 对应 ROS 接口 |
+| --- | --- |
+| `list_targets` | 订阅 `/perception/targets_3d` 的最新快照 |
+| `get_joint_states` | 订阅 `/joint_states` |
+| `solve_fk` | `/kinematics/solve_fk` |
+| `solve_ik` | `/kinematics/solve_ik`（姿态固定为夹爪朝下） |
+| `grasp` | `/grasp/execute`，同步等完，超时 120 s |
+| `bag_report` | 子进程跑 `tools/bag_report.py`，只读不写 |
+
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 run arm_mcp mcp_server     # 日志走 stderr，stdout 留给 JSON-RPC
+
+# 自检：握手、工具清单、ping、两个只读工具、白名单拦截。不需要 API key
+python3 ~/ros2-vision-grasp/tools/mcp_selftest.py
+```
+
+**4c 自然语言抓取**：`tools/nl_grasp.py` 拉起 MCP Server，把 `tools/list` 转成 function-calling schema，用 `urllib` 调模型接口，执行返回的 `tool_calls` 并把结果回喂，直到给出中文结论。默认接 DeepSeek，用三个环境变量可切到任意 OpenAI 兼容接口——智谱 GLM 的 4.x Flash 系列目前免费，适合零成本演示（注意 `GLM-5.3-Flash` 已收费，换模型前先看定价页）。本次验收用的是 `glm-4.5-flash`；`glm-4.7-flash` 高峰期会返回 429/1305 限流，换个 Flash 型号或稍后重试即可。
+
+```bash
+export DEEPSEEK_API_KEY=你的key    # 只从环境变量读，仓库里不存 key
+python3 ~/ros2-vision-grasp/tools/nl_grasp.py "把红色方块抓起来"
+
+# 换免费模型（智谱开放平台 open.bigmodel.cn，注册即可拿 key）
+export NL_API_BASE=https://open.bigmodel.cn/api/paas/v4/chat/completions
+export NL_MODEL=glm-4.5-flash     # 4.7 高峰期会 429，4.5 更稳
+export NL_API_KEY=你的智谱key
+
+# 先看模型打算调用哪些工具，不动机械臂（仿真没开也能跑）
+python3 ~/ros2-vision-grasp/tools/nl_grasp.py --dry-run "绿色的方块在哪"
+```
+
+### Phase 4 完成标准
+
+- [x] `bag_record.sh data` 录出的包能被 `bag_report.py` 读出报告，抬升量与在线抓取一致（实测 85.3 s / 3530 条 / red 抬升 **129 mm**、水平漂移 2.4 mm，在线同一轮为 130 mm）
+- [x] `ros2 bag play --clock` 回放时 `/perception/targets_3d` 能重新 echo 到数据（在 `ROS_DOMAIN_ID=42` 下验证，与仿真隔离）
+- [x] `tools/mcp_selftest.py` 自检 6/6 通过：握手、6 个工具、ping、两个只读工具、白名单拦截
+- [x] `nl_grasp.py --dry-run` 能拿到模型的工具调用计划（GLM-4.5-Flash 两轮：`list_targets` → `grasp` 预演 → 中文总结）
+- [x] `nl_grasp.py "把绿色方块抓起来"` 真实驱动抓取并回报抬升量（`grasp verified, cube lifted **128 mm**`，两轮收敛；同一次验收中 red 为 130 mm）
 
 ## Phase 2 完成标准（已验收 2026-10-18）
 
@@ -238,7 +304,7 @@ LIBGL_ALWAYS_SOFTWARE=1 ros2 launch arm_bringup arm_gazebo.launch.py use_rviz:=f
 | 2（已完成） | TF2 + 针孔反投影 | 基座坐标系目标位姿，集成后 XY 误差 1–9 mm |
 | 3a（已完成） | ros2_control + 关节轨迹控制 | 六个关节 + 夹爪可控，动作接口验证通过 |
 | 3b（已完成） | KDL 正逆解 + 抓取状态机 | 三色抓取抬升 130/128/117 mm，IK 成功率 93.3% |
-| 4（当前） | rosbag2 录制回放 + MCP Server + DeepSeek 工具调用 | 自然语言驱动抓取 |
+| 4（已完成） | rosbag2 录制回放 + MCP Server + 大模型工具调用 | 离线报告复现 red 抬升 129 mm；中文指令实抓 green 128 mm |
 | 5 | socat 虚拟串口 + AA55/CRC16 协议桥 | MCU ↔ ROS2 通信演示 |
 
 ## License

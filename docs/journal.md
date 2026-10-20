@@ -161,7 +161,63 @@
 - Phase 4：rosbag2 录制回放、MCP Server + DeepSeek 自然语言驱动抓取。
 - Windows 仓库与 VM `~/ros2_ws/src` 目前一致（VM 侧用单行 sed 打的补丁），但 VM 的 `~/ros2-vision-grasp` 是旧副本，`grasp_node.py` 仍是翻转姿态那版，别再从那里往 `~/ros2_ws/src` 覆盖。
 
+## 2026-10-19 Phase 4 实现与 4a/4b 验收
 
+抓取验收通过后同一天把 Phase 4 的代码写完，还没在虚拟机里跑过，验收前不要当已完成写进简历。
+
+### 改动记录（供交接）
+
+1. **新增 `tools/bag_record.sh`**：两个 profile。`data`（默认）只录 `/perception/detections`、`/perception/targets_3d`、三个 `/model/cube_*/pose`、`/joint_states`、`/tf`、`/tf_static`，一分钟几 MB；`vision` 再加 `/camera/{image,camera_info,depth_image}`，用 `--max-bag-size 209715200` 分卷 —— 软件渲染下相机约 8 MB/s，不分卷几分钟就吃掉几个 G。第三个参数是 `--duration`，省略则录到 Ctrl+C。
+2. **新增 `tools/bag_report.py`**：`rosbag2_py.SequentialReader` 离线读包，输出话题消息数表、三色目标首末位置、方块真值抬升量与水平漂移（沿用抓取节点 30 mm 门槛）、末帧关节角。`storage_identifier` 从 `metadata.yaml` 正则读，不写死 `sqlite3`，否则 mcap 包打不开。水平漂移那一列是抓 3b 的经验：失败的抓取会把方块推走，只看 z 会漏判。
+3. **新增 `src/arm_mcp` 包（ament_python）**：`mcp_server.py` 用标准库实现 MCP 的 stdio JSON-RPC 2.0（按行分帧，`initialize` / `notifications/initialized` / `ping` / `tools/list` / `tools/call`），不装 pip 的 `mcp` SDK。`ArmBridge` 起 rclpy 节点 + `SingleThreadedExecutor` 跑在 daemon 线程，工具处理器在主线程轮询 `future.done()`，避免主线程阻塞时回调进不来。暴露 6 个工具：`list_targets`、`get_joint_states`、`solve_fk`、`solve_ik`、`grasp`（超时 120 s，覆盖软件渲染下最慢的一次抓取）、`bag_report`。
+   - `tools/call` 的分发用白名单校验工具名，`getattr` 拿到的属性必须在 `TOOLS` 里才执行，否则 `-32602`；`bag_report` 走 `subprocess.run([...])` 不经 shell，并先校验路径是绝对目录且含 `metadata.yaml`。
+   - 单个请求异常只回 JSON-RPC error，不退出进程：MCP server 崩了客户端只会看到管道断开，很难查。
+   - 日志一律走 stderr，stdout 只留 JSON-RPC，否则混进一行日志整个流就废了。
+4. **新增 `tools/nl_grasp.py`**：子进程拉起 `ros2 run arm_mcp mcp_server`，`tools/list` 转成 DeepSeek 的 function schema，`urllib` 调 `https://api.deepseek.com/chat/completions`（`model=deepseek-chat`、`temperature=0.1`），执行 `tool_calls` 后把结果作为 `role=tool` 消息回喂，最多 6 轮。子进程 stderr 直接继承到终端，方便看 MCP 侧日志。
+   - API key 只从环境变量读，缺失就退出并提示单行 `export`；任何日志都不打印 key。
+   - 接口地址与模型名可配（`NL_API_BASE` / `NL_MODEL` / `NL_API_KEY`），默认 `api.deepseek.com` + `deepseek-chat`。加这层是因为 DeepSeek 没有免费额度，而智谱 GLM 的 4.x Flash 系列（`glm-4.7-flash`、`glm-4-flash-250414`）目前永久免费且接口 OpenAI 兼容，学生演示零成本。**坑：不能看到 Flash 后缀就当免费，`GLM-5.3-Flash` 已经收费**（¥0.8/¥2.8 每百万 token），换型号前先看定价页。
+   - `--dry-run` 不执行工具，只把「模型想调用什么」回喂给模型，用来在没有仿真的情况下验证整条链路。
+5. **新增 `.gitattributes`**：`*.sh`/`*.py`/`*.xacro`/`*.sdf`/`*.yaml`/`*.msg`/`*.srv` 强制 `eol=lf`。Windows 上 `core.autocrlf=true` 会让检出的 `.sh` 变成 CRLF，shebang 就成了 `bash\r`，拷进虚拟机直接报 `bad interpreter`。
+6. **README**：依赖行加 `ros-jazzy-rosbag2`，包数 6 → 7，目录结构补 `arm_mcp` 与 tools 说明，新增「Phase 4」章与 5 条完成标准，路线图 Phase 4 标注「代码已完成，待虚拟机验收」。顺手把 Phase 3b 验收清单里写错的「七个包」改回「六个包」（`src/` 当时只有 6 个包）。
+
+### Phase 4a/4b 验收（2026-10-19）
+
+- `arm_mcp` 编译通过（`--symlink-install`，11 s），`ros2 pkg executables arm_mcp` → `arm_mcp mcp_server`。
+- `mcp_selftest.py` **6/6 PASS**：握手 `protocol=2024-11-05`、6 个工具名正确、ping、`list_targets` 返回 blue/green/red 三个目标、`get_joint_states` 返回 8 个关节、白名单拦截 `shutdown`（返回 `Unknown tool`）。
+- 录制 + 抓取 + 报告：`bag_record.sh data ~/bags/t1` 录 **85.3 s / 8 个话题 / 3530 条**，期间 `/grasp/execute red` 成功。`bag_report.py` 输出 red **抬升 129 mm、水平漂移 2.4 mm**（在线同一轮 130 mm），green/blue 0 mm 符合只抓红色的预期。报告里 red 目标末次 z=0.177，是感知跟着被抬起的方块一起上升，不是误差。
+- 回放：`ROS_DOMAIN_ID=42 ros2 bag play ~/bags/t1 --clock` 后同域 `ros2 topic echo /perception/targets_3d --once` 拿到与包内完全一致的三色目标（red z=0.0501、depth 1.0044），与仿真域隔离，证明数据确实来自包。
+- 踩坑：**MCP Server 起得太快会误报「没数据」**。客户端握手后立刻 `tools/call`，此时 DDS 还在发现阶段，订阅一帧都没收到，`list_targets` 返回 `target_count: 0`。修法是每个订阅配一个 `threading.Event`，工具里 `wait(3.0)` 等首帧。另一个坑是退出时 `executor.shutdown()` 后没有 `join` spin 线程就 `destroy_node()`，rclpy 报 `terminate called without an active exception`（功能不受影响但看着像崩溃），改成 shutdown → join → destroy → rclcpp shutdown。
+- 踩坑：VMware 的文件拖拽**默认落到 `~/ros2-vision-grasp`**（旧副本），不是 `~/ros2_ws/src`。已经两次出现「改了但没生效」，判据是 `grep -c FIRST_MESSAGE_WAIT` 在 `~/ros2_ws/src/...` 下应为 4。以后每次同步完都要 grep 校验再重启。
+
+### 下一步
+
+- Phase 4c 已于 10-20 用免费的智谱 GLM-4.5-Flash 验收，不需要 DeepSeek key，详见下一节。
+- `arm_mcp` 还没接进任何 launch 文件（按需手动起），不建议现在加开关：MCP Server 是给外部客户端用的常驻进程，塞进 launch 反而会和手动的进程抢同一套订阅。
+- GitHub push 仍未成功：本机连 `github.com:443` 超时（`api.github.com` 正常），`origin/main` 停在 `d470452`，本地已领先 3 个 commit（含 Phase 3b 验收那次提交）。README 现在描述的是未 push 的状态，投递前必须先把仓库推上去。
+
+## 2026-10-20 Phase 4c 验收（GLM-4.5-Flash）
+
+自然语言链路在虚拟机上真跑通。DeepSeek 没有免费额度，改用智谱 GLM 的免费 Flash 档；接口是 OpenAI 兼容格式，脚本只换三个环境变量。
+
+### 结果
+
+- `--dry-run "把红色方块抓起来"`：两轮收敛。第 1 轮 `list_targets` 拿到 `target_count: 3`，第 2 轮 `grasp(red)` 拿到带 `dry_run` 标记的预演结果，随后模型用中文总结，MCP 握手、工具清单、结果回喂全部正常。
+- 真抓 green：`list_targets` → `grasp(green)` → `grasp verified, cube lifted 128 mm`，模型汇报「绿色方块抓取成功！方块被抬升了 128 毫米」，两轮结束。
+- 真抓 red：第一次运行时 red 已经被 4a 的录制测试抓在空中——感知 z=0.177（base_link 系顶面），方块 pose z=0.405（world 系中心），比 spawn 的 0.275 正好高 130 mm。状态机按桌面高度抓了两次空气（dz=1 mm、−25 mm），第二次把方块碰回桌面，第三次在桌面重抓成功 130 mm。结束后方块仍夹在爪里（pose z=0.4049，水平漂移 8 mm），没有掉落。
+- 结论：模型会依据工具返回自行重试，最终能完成；但演示前必须保证三个方块都在桌面，否则前几轮会浪费在空气上。
+
+### 踩坑
+
+1. **GLM 免费档 429/1305**：`glm-4.7-flash` 当天返回「该模型当前访问量过大」，换 `glm-4.5-flash` 立刻可用。免费档并发低，演示前先热身一次。
+2. **复制进零宽空格**：从聊天窗口复制 `NL_API_BASE` 时带进 U+200B，`urllib` 报 `<urlopen error unknown url type: https>`。脚本里加 `clean_env()` 去掉 U+200B/BOM；shell 侧可先过滤再 `echo ${#NL_API_BASE}` 校验（53）。
+3. **dry-run 空壳结果导致原地循环**：预演把所有工具都回成 `{"dry_run": true, "tool": ...}`，模型拿不到目标字段，以为没查到，重复调用 `list_targets`/`grasp` 直到耗尽轮数。修法是预演也返回结构完整的数据（目标列表、`success` + `message`），并在 dry-run 的系统提示里说明「预演、别重复调用」。
+4. **轮数上限差一轮**：模型在最后一轮才调用 `grasp` 并成功，已经没有轮次生成总结，脚本以「未收敛」退出。`MAX_ROUNDS` 6 → 8，给收尾留一轮。
+
+### 下一步
+
+- Phase 4 全部验收完成，README 与简历可以写「自然语言驱动抓取 + rosbag 离线复现」。
+- 演示前重启 launch 重置世界，确保三色方块都在桌面。
+- push 仍被本机网络卡住，`github.com:443` 不通；恢复后先提交 Phase 4 再推。
 
 ---
 

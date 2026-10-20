@@ -1,0 +1,9 @@
+# VM 里执行 .sh / .py，CRLF 会让 shebang 变成 "bash\r" 直接报错
+*.sh text eol=lf
+*.py text eol=lf
+*.launch.py text eol=lf
+*.xacro text eol=lf
+*.sdf text eol=lf
+*.yaml text eol=lf
+*.msg text eol=lf
+*.srv text eol=lf
