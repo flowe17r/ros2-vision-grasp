@@ -248,7 +248,7 @@
 
 <!-- 后续按日期追加：做了什么 / 遇到什么错误 / 根因 / 怎么验证 -->
 
-## 2026-10-21 CI 修复：安装依赖失败（rosdep 键错误）
+## 2026-10-21 CI 修复：rosdep 键、容器 shell 与空 Python 包测试
 
 ### 现象
 
@@ -260,6 +260,7 @@ GitHub Actions 在 `310f419`（Phase 5）与 `8b4d2d8`（Phase 4）两次运行�
 - 新运行 `39454063091` 仍在同一位置失败，但注解给出了真实原因：`arm_kinematics: Cannot locate rosdep definition for [orocos_kdl]`。
 - 根因：`orocos_kdl` 不是 rosdep 键；`arm_kinematics` 是 10-20 新增的包，`d470452` 里还没有它，所以旧运行能通过。重试对确定性错误无效。
 - 上游 `kdl_parser` 的写法是 `<build_depend>liborocos-kdl-dev</build_depend>` + `<exec_depend>liborocos-kdl</exec_depend>`，按同一方式修正 `arm_kinematics/package.xml`。
+- 运行 `39526555567`：Install/Build 成功，Test 失败；注解显示 `colcon test rc=5, test-result rc=0`，9 tests / 0 failures。根因是 `arm_grasp`、`arm_mcp`、`arm_perception` 三个 `ament_python` 包没有 test 目录，`colcon test` 对它们调用 pytest 时因「未收集到用例」返回 5；实际用例全部通过。
 
 ### 改动
 
@@ -267,10 +268,12 @@ GitHub Actions 在 `310f419`（Phase 5）与 `8b4d2d8`（Phase 4）两次运行�
 - `.github/workflows/ci.yml`：安装步骤保留 `shell: bash` + 3 次重试（15 s、30 s 退避）和 20 分钟超时；失败时把最后 5 行输出写成 `::error::` 注解。重试不是本次根因的解，但能兜住 apt/rosdep 的网络抖动，注解则让下次无需登录也能看到报错。
 - `.github/workflows/ci.yml`：Build/Test 步骤也显式加 `shell: bash`。运行 `39486829167` 显示安装依赖已通过、Build 报 exit 127；容器作业默认 shell 是 `sh`，`source` 在 `sh` 下是「command not found」，不是 setup.bash 不存在。
 - `.github/workflows/ci.yml`：Test 步骤改为先记录 `colcon test` 与 `colcon test-result` 的退出码，失败时把 `test-result --all` 的最后 25 行写成 `::error::` 注解。运行 `39526108397` 已通过 Install/Build，Test 返回 exit 5，但 GitHub 只给通用注解，需要这样拿到具体失败项。
+- `.github/workflows/ci.yml`：Test 改为 `colcon test --packages-select arm_serial`，与 README 和虚拟机验收命令一致；三个空的 `ament_python` 包不再触发 pytest 的 exit 5。
 
 ### 验证
 
 - `package.xml` 用 PowerShell 的 XML 解析器检查，格式合法。
 - 本地用 `js-yaml` 解析工作流，确认 YAML 合法、安装步骤包含 4 个重试入口。
 - 运行 `39486829167`：Install dependencies 成功，Build 因默认 shell 失败（127）；已补 `shell: bash`。
-- 运行 `39526108397`：Install dependencies 与 Build 均成功，Test 失败（exit 5）；已加测试结果注解，等待下一次运行定位具体用例。
+- 运行 `39526108397`：Install dependencies 与 Build 均成功，Test 失败（exit 5）；已加测试结果注解。
+- 运行 `39526555567`：注解显示 9 tests / 0 failures，失败仅来自空 Python 包的 pytest exit 5；已限定 `--packages-select arm_serial`，等待下一次运行验证全绿。

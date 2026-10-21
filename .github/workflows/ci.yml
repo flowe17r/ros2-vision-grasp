@@ -51,7 +51,7 @@ jobs:
           source /opt/ros/jazzy/setup.bash
           source install/setup.bash
           set +e
-          colcon test --event-handlers console_direct+
+          colcon test --packages-select arm_serial --event-handlers console_direct+
           test_rc=$?
           result=$(colcon test-result --verbose --all 2>&1)
           result_rc=$?
