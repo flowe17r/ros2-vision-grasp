@@ -50,5 +50,14 @@ jobs:
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/setup.bash
+          set +e
           colcon test --event-handlers console_direct+
-          colcon test-result --verbose
+          test_rc=$?
+          result=$(colcon test-result --verbose --all 2>&1)
+          result_rc=$?
+          printf '%s\n' "$result"
+          if [ "$test_rc" -ne 0 ] || [ "$result_rc" -ne 0 ]; then
+            summary=$(printf '%s' "$result" | tail -n 25 | tr '\n' ' ' | cut -c1-900)
+            echo "::error::colcon test rc=$test_rc, test-result rc=$result_rc: $summary"
+            exit 1
+          fi
