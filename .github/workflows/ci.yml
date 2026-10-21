@@ -40,11 +40,13 @@ jobs:
           retry rosdep install --from-paths src --ignore-src -y --rosdistro jazzy
 
       - name: Build
+        shell: bash
         run: |
           source /opt/ros/jazzy/setup.bash
           colcon build --symlink-install --event-handlers console_direct+
 
       - name: Test
+        shell: bash
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/setup.bash

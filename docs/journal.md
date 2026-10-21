@@ -265,9 +265,10 @@ GitHub Actions 在 `310f419`（Phase 5）与 `8b4d2d8`（Phase 4）两次运行�
 
 - `src/arm_kinematics/package.xml`：`<depend>orocos_kdl</depend>` 拆成 `liborocos-kdl-dev`（build）与 `liborocos-kdl`（exec）。
 - `.github/workflows/ci.yml`：安装步骤保留 `shell: bash` + 3 次重试（15 s、30 s 退避）和 20 分钟超时；失败时把最后 5 行输出写成 `::error::` 注解。重试不是本次根因的解，但能兜住 apt/rosdep 的网络抖动，注解则让下次无需登录也能看到报错。
+- `.github/workflows/ci.yml`：Build/Test 步骤也显式加 `shell: bash`。运行 `39486829167` 显示安装依赖已通过、Build 报 exit 127；容器作业默认 shell 是 `sh`，`source` 在 `sh` 下是「command not found」，不是 setup.bash 不存在。
 
 ### 验证
 
 - `package.xml` 用 PowerShell 的 XML 解析器检查，格式合法。
 - 本地用 `js-yaml` 解析工作流，确认 YAML 合法、安装步骤包含 4 个重试入口。
-- 真实结果以再次 push 后的 GitHub Actions 运行为准。
+- 运行 `39486829167`：Install dependencies 成功，Build 因默认 shell 失败（127）；已补 `shell: bash`，等待下一次运行验证 Build/Test。
